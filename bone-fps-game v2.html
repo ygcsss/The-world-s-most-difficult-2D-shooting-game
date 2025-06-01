@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>骨爆FPS：NPC瘋狂倍增版</title>
+  <style>
+    body {
+      background: black;
+      margin: 0;
+      overflow: hidden;
+      color: white;
+      font-family: monospace;
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border: 1px solid white;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="800" height="600"></canvas>
+  <div id="ui">骨頭緩衝中…</div>
+  <audio id="sfx" src="https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg"></audio>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const ui = document.getElementById("ui");
+    const sfx = document.getElementById("sfx");
+
+    const player = {
+      x: 400,
+      y: 300,
+      vx: 0,
+      vy: 0,
+      size: 20,
+      hp: 5,
+      bullets: 10,
+      maxBullets: 10,
+      invincible: false
+    };
+
+    let bullets = [];
+    let npcs = [];
+    let npcBullets = [];
+    let wave = 1;
+    let allDeadTimer = 0;
+    let bossSpawned = false;
+    let proMode = false;
+    let paused = false;
+
+    const keys = {};
+    const activeKeys = new Set();
+
+    // 新增旗標，只顯示一次
+    let noobAlerted = false;
+    let proAlerted = false;
+
+    document.addEventListener("keydown", e => {
+      if (e.code === "Escape") {
+        paused = !paused;
+        ui.innerText = paused ? "遊戲已暫停。按 ESC 繼續。" : "回到骨鬥現場！";
+        return;
+      }
+
+      if (paused) return;
+
+      keys[e.code] = true;
+      activeKeys.add(e.key.toLowerCase());
+
+      // 只顯示一次無敵提示
+      if (!noobAlerted && ["n", "o", "o", "b"].every(k => activeKeys.has(k))) {
+        player.invincible = true;
+        noobAlerted = true;
+        sfx.play();
+        alert("你變成無敵傻逼，飛到宇宙！");
+      }
+
+      // 只顯示一次PRO模式提示
+      if (!proAlerted && ["p", "r", "o"].every(k => activeKeys.has(k))) {
+        proMode = true;
+        player.hp = 1;
+        proAlerted = true;
+        sfx.play();
+        alert("你啟動了PRO模式，準備被骨頭轟成渣渣！");
+      }
+
+      if (e.code === "Space" && !player.invincible) die("傻逼！你已飛到宇宙！");
+      if (e.code === "KeyR") {
+        let explodeChance = proMode ? 1.25 : 0.25;
+        if (!player.invincible && Math.random() < explodeChance) die("彈夾卡住爆炸，你死了。")
+        else player.bullets = player.maxBullets;
+      }
+    });
+
+    document.addEventListener("keyup", e => {
+      keys[e.code] = false;
+      activeKeys.delete(e.key.toLowerCase());
+    });
+
+    document.addEventListener("mousedown", e => {
+      if (paused) return;
+      if (player.bullets <= 0) return;
+      player.bullets--;
+      if (!player.invincible && Math.random() < (proMode ? 1.25 : 0.25)) {
+        player.hp--;
+        if (player.hp <= 0) die("你自己打死自己了，傻逼！");
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+      bullets.push({
+        x: player.x + player.size / 2,
+        y: player.y + player.size / 2,
+        dx: Math.cos(angle) * 10,
+        dy: Math.sin(angle) * 10
+      });
+    });
+
+    function spawnNPC(x, y, hp = 5, isBoss = false) {
+      if (proMode) {
+        isBoss = true;
+        hp *= 2;
+      }
+      return {
+        x,
+        y,
+        size: isBoss ? 40 : 20,
+        hp,
+        maxHp: hp,
+        shootCooldown: 0,
+        isBoss
+      };
+    }
+
+    function die(msg) {
+      if (!player.invincible) {
+        alert(msg);
+        location.reload();
+      }
+    }
+
+    function update() {
+      if (paused) {
+        requestAnimationFrame(update);
+        return;
+      }
+
+      if (keys["KeyD"]) player.vx = 2;
+      else if (keys["KeyA"]) player.vx = -2;
+      else player.vx = 0;
+
+      if (keys["KeyS"]) player.vy = 2;
+      else if (keys["KeyW"]) player.vy = -2;
+      else player.vy = 0;
+
+      if (!player.invincible && Math.random() < 0.01) player.vx = player.vy = 0;
+      player.x += player.vx;
+      player.y += player.vy;
+
+      bullets.forEach(b => {
+        b.x += b.dx;
+        b.y += b.dy;
+        npcs.forEach(npc => {
+          if (npc.hp > 0 && b.x > npc.x && b.x < npc.x + npc.size && b.y > npc.y && b.y < npc.y + npc.size) {
+            npc.hp--;
+            b.hit = true;
+          }
+        });
+      });
+      bullets = bullets.filter(b => !b.hit);
+
+      let allDead = true;
+      npcs.forEach(npc => {
+        if (npc.hp > 0) {
+          allDead = false;
+          npc.shootCooldown++;
+          if (npc.shootCooldown >= 30) {
+            npc.shootCooldown = 0;
+            const angle = Math.atan2(player.y - npc.y, player.x - npc.x);
+            npcBullets.push({
+              x: npc.x + npc.size / 2,
+              y: npc.y + npc.size / 2,
+              dx: Math.cos(angle) * 6,
+              dy: Math.sin(angle) * 6,
+              isBoss: npc.isBoss
+            });
+          }
+        }
+      });
+
+      npcBullets.forEach(b => {
+        b.x += b.dx;
+        b.y += b.dy;
+        if (b.x > player.x && b.x < player.x + player.size && b.y > player.y && b.y < player.y + player.size) {
+          if (!player.invincible) {
+            if (b.isBoss || Math.random() < (proMode ? 0.5 : 0.2)) player.hp = 0;
+            else player.hp -= 2;
+            b.hit = true;
+            if (player.hp <= 0) die("你被 NPC 骨爆。");
+          }
+        }
+      });
+      npcBullets = npcBullets.filter(b => !b.hit);
+
+      if (allDead) {
+        allDeadTimer++;
+        if (allDeadTimer > 300) {
+          allDeadTimer = 0;
+          wave++;
+          npcs = [];
+          let count = Math.min(5, wave);
+          for (let i = 0; i < count; i++) {
+            npcs.push(spawnNPC(Math.random() * 700, Math.random() * 500, 5 + wave * 2));
+          }
+          if (!bossSpawned) {
+            npcs.push(spawnNPC(350, 200, 50, true));
+            bossSpawned = true;
+          }
+        }
+      }
+
+      draw();
+      requestAnimationFrame(update);
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "white";
+      ctx.fillRect(player.x, player.y, player.size, player.size);
+
+      ctx.fillStyle = "cyan";
+      bullets.forEach(b => ctx.fillRect(b.x, b.y, 5, 5));
+
+      npcs.forEach(npc => {
+        if (npc.hp > 0) {
+          ctx.fillStyle = npc.isBoss ? "magenta" : "red";
+          ctx.fillRect(npc.x, npc.y, npc.size, npc.size);
+          ctx.fillStyle = "lime";
+          ctx.fillRect(npc.x, npc.y - 10, (npc.hp / npc.maxHp) * npc.size, 4);
+        }
+      });
+
+      ctx.fillStyle = "orange";
+      npcBullets.forEach(b => ctx.fillRect(b.x, b.y, 5, 5));
+
+      ui.innerText = `血量: ${player.hp}  | 子彈: ${player.bullets}/${player.maxBullets} | 波數: ${wave} | 模式: ${player.invincible ? 'NOOB無敵' : (proMode ? 'PRO煉獄' : '正常骨鬥')}`;
+    }
+
+    npcs.push(spawnNPC(100, 100));
+    update();
+  </script>
+</body>
+</html>
